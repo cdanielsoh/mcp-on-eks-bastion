@@ -3,11 +3,11 @@ import os
 
 import aws_cdk as cdk
 
-from mcp_eks.mcp_eks_stack import McpEksStack
+from mcp_eks.mcp_eks_stack import EksClusterStack
 
 
 app = cdk.App()
-McpEksStack(app, "McpEksStack",
+EksClusterStack(app, "McpEksStack",
     # If you don't specify 'env', this stack will be environment-agnostic.
     # Account/Region-dependent features and context lookups will not work,
     # but a single synthesized template can be deployed anywhere.
