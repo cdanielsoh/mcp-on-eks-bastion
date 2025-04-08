@@ -1,5 +1,5 @@
 
-# Welcome to your CDK Python project!
+# Access your EKS cluster in natural language
 ## Prerequisites
 Before using this project, ensure you have the Amazon Bedrock Inline Agent SDK installed:
 

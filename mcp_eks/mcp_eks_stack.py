@@ -120,7 +120,61 @@ class EksClusterStack(Stack):
         cluster_name = cluster.cluster_name
         region = self.region
 
-        bootstrap_script = f"""#!/bin/bash
+        bootstrap_script = get_bootstrap_script().format(
+            kubernetes_version=kubernetes_version,
+            cluster_name=cluster_name,
+            region=region
+        )
+        user_data.add_commands(bootstrap_script)
+
+        # Create the EC2 bastion host
+        bastion = ec2.Instance(
+            self,
+            "EKSBastion",
+            instance_type=ec2.InstanceType("t3.medium"),
+            machine_image=ec2.AmazonLinuxImage(
+                generation=ec2.AmazonLinuxGeneration.AMAZON_LINUX_2023
+            ),
+            vpc=vpc,
+            vpc_subnets=ec2.SubnetSelection(subnet_type=ec2.SubnetType.PUBLIC),
+            role=bastion_role,
+            security_group=bastion_sg,
+            user_data=user_data,
+            key_name=key_pair.key_name
+        )
+
+        # Add dependency on the key pair
+        bastion.node.add_dependency(key_pair)
+        bastion.node.add_dependency(cluster)
+
+        # Create outputs to help user access the cluster
+        CfnOutput(
+            self,
+            "ClusterName",
+            value=cluster.cluster_name
+        )
+
+        CfnOutput(
+            self,
+            "BastionInstancePublicDnsName",
+            value=bastion.instance_public_dns_name
+        )
+
+        CfnOutput(
+            self,
+            "BastionSSHCommand",
+            value=f"ssh -i /path/to/eks-bastion-key.pem ec2-user@{bastion.instance_public_dns_name}"
+        )
+
+        CfnOutput(
+            self,
+            "UpdateKubeConfigCommand",
+            value=f"aws eks update-kubeconfig --name {cluster.cluster_name} --region {self.region}"
+        )
+
+
+def get_bootstrap_script():
+    return """#!/bin/bash
 # Update and install required packages
 dnf update -y
 
@@ -179,50 +233,3 @@ systemctl start kubernetes-mcp-server
 # Optional: Log the startup attempt
 echo "Kubernetes MCP Server startup initiated at $(date)" >> $LOGFILE
 """
-
-        user_data.add_commands(bootstrap_script)
-
-        # Create the EC2 bastion host
-        bastion = ec2.Instance(
-            self,
-            "EKSBastion",
-            instance_type=ec2.InstanceType("t3.medium"),
-            machine_image=ec2.AmazonLinuxImage(
-                generation=ec2.AmazonLinuxGeneration.AMAZON_LINUX_2023
-            ),
-            vpc=vpc,
-            vpc_subnets=ec2.SubnetSelection(subnet_type=ec2.SubnetType.PUBLIC),
-            role=bastion_role,
-            security_group=bastion_sg,
-            user_data=user_data,
-            key_name=key_pair.key_name
-        )
-
-        # Add dependency on the key pair
-        bastion.node.add_dependency(key_pair)
-        bastion.node.add_dependency(cluster)
-
-        # Create outputs to help user access the cluster
-        CfnOutput(
-            self,
-            "ClusterName",
-            value=cluster.cluster_name
-        )
-
-        CfnOutput(
-            self,
-            "BastionInstancePublicDnsName",
-            value=bastion.instance_public_dns_name
-        )
-
-        CfnOutput(
-            self,
-            "BastionSSHCommand",
-            value=f"ssh -i /path/to/eks-bastion-key.pem ec2-user@{bastion.instance_public_dns_name}"
-        )
-
-        CfnOutput(
-            self,
-            "UpdateKubeConfigCommand",
-            value=f"aws eks update-kubeconfig --name {cluster.cluster_name} --region {self.region}"
-        )
