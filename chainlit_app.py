@@ -1,11 +1,16 @@
 import chainlit as cl
 from InlineAgent.agent import InlineAgent
 from InlineAgent.tools import MCPHttp
+import os
+from dotenv import load_dotenv
+
+
+load_dotenv()
 
 # Configuration
-EC2_HOST = "ec2-35-85-57-47.us-west-2.compute.amazonaws.com"
-MCP_PORT = 8000
-EKS_CLUSTER = "23D6D50DCD777B7C1572AF24A62D7388.gr7.us-west-2.eks.amazonaws.com"
+EC2_HOST = os.getenv('BASTION_HOST')
+MCP_PORT = os.getenv('MCP_PORT')
+EKS_CLUSTER = os.getenv("EKS_CLUSTER")
 
 # Global variables
 agent = None

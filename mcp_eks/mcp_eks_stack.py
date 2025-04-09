@@ -2,21 +2,33 @@
 import os
 import boto3
 from aws_cdk import (
-    App,
     Stack,
     CfnOutput,
     aws_ec2 as ec2,
     aws_eks as eks,
     aws_iam as iam,
+    aws_lambda as lambda_,
     RemovalPolicy,
-    SecretValue
+    Duration
 )
 from aws_cdk.lambda_layer_kubectl_v32 import KubectlV32Layer
+from aws_cdk.lambda_layer_awscli import AwsCliLayer
 from constructs import Construct
+import requests
 
 sts_client = boto3.client('sts')
 current_identity = sts_client.get_caller_identity()
-builder_role_arn = current_identity['Arn']
+builder_user_arn = current_identity['Arn']
+
+
+def get_public_ip():
+    """Retrieve the current public IP address."""
+    try:
+        response = requests.get('https://api.ipify.org')
+        return response.text
+    except requests.RequestException:
+        raise ValueError("Could not retrieve public IP address")
+
 
 class EksClusterStack(Stack):
     def __init__(self, scope: Construct, construct_id: str, **kwargs) -> None:
@@ -41,18 +53,11 @@ class EksClusterStack(Stack):
         # Set removal policy to delete the key pair when stack is deleted
         key_pair.apply_removal_policy(RemovalPolicy.DESTROY)
 
-        # Create outputs to help retrieve the private key
-        CfnOutput(
-            self,
-            "GetSSHKeyCommand",
-            value=f"aws ssm get-parameter --name /ec2/keypair/{key_pair.key_name} --region {self.region} --with-decryption --query Parameter.Value --output text > {key_pair.key_name}.pem && chmod 400 {key_pair.key_name}.pem"
-        )
-
         # Create an IAM role for the EKS cluster
-        cluster_role = iam.Role.from_role_arn(
+        cluster_user = iam.Role.from_role_arn(
             self,
             "ClusterRole",
-            role_arn=builder_role_arn
+            role_arn=builder_user_arn
         )
 
         # Create IAM role for the bastion EC2 instance
@@ -60,6 +65,40 @@ class EksClusterStack(Stack):
             self,
             "BastionRole",
             assumed_by=iam.ServicePrincipal("ec2.amazonaws.com")
+        )
+
+        kubectl_lambda_layer = KubectlV32Layer(self, "kubectl")
+        awscli_lambda_layer = AwsCliLayer(self, "AwsCliLayer")
+
+        kubectl_lambda_role = iam.Role(
+            self, "KubectlLambdaRole",
+            assumed_by=iam.ServicePrincipal("lambda.amazonaws.com")
+        )
+
+        kubectl_lambda = lambda_.Function(
+            self,
+            "KubectlExecutionFunction",
+            runtime=lambda_.Runtime.PYTHON_3_12,
+            code=lambda_.Code.from_asset("lambda/kubectl"),
+            handler="index.handler",
+            role=kubectl_lambda_role,
+            timeout=Duration.seconds(300),
+            memory_size=512,
+            layers=[kubectl_lambda_layer, awscli_lambda_layer]
+        )
+
+        # Add necessary permissions to execute kubectl commands against the EKS cluster
+        kubectl_lambda_role.add_managed_policy(
+            iam.ManagedPolicy.from_aws_managed_policy_name("AmazonEKSClusterPolicy")
+        )
+        kubectl_lambda_role.add_managed_policy(
+            iam.ManagedPolicy.from_aws_managed_policy_name("service-role/AWSLambdaBasicExecutionRole")
+        )
+        kubectl_lambda_role.add_to_policy(
+            iam.PolicyStatement(
+                actions=["eks:DescribeCluster"],
+                resources=["*"]
+            )
         )
 
         # Create the EKS cluster
@@ -72,7 +111,8 @@ class EksClusterStack(Stack):
             default_capacity=2,  # Start with 2 nodes
             default_capacity_instance=ec2.InstanceType("t3.medium"),  # Use moderate sized instances
             authentication_mode=eks.AuthenticationMode.API_AND_CONFIG_MAP,
-            kubectl_layer=KubectlV32Layer(self, "kubectl"),
+            kubectl_layer=kubectl_lambda_layer,
+            kubectl_lambda_role=kubectl_lambda_role,
             endpoint_access=eks.EndpointAccess.PUBLIC,
             masters_role=bastion_role
         )
@@ -93,8 +133,16 @@ class EksClusterStack(Stack):
         )
 
         # Add the bastion role to the EKS cluster's auth config
-        cluster.aws_auth.add_role_mapping(
-            role=bastion_role,
+        cluster.aws_auth.add_masters_role(
+            role=bastion_role
+        )
+
+        cluster.aws_auth.add_masters_role(
+            role=kubectl_lambda_role
+        )
+
+        cluster.aws_auth.add_user_mapping(
+            user=cluster_user,
             groups=["system:masters"]
         )
 
@@ -109,9 +157,8 @@ class EksClusterStack(Stack):
 
         # Allow SSH inbound from anywhere (you might want to restrict this in production)
         bastion_sg.add_ingress_rule(
-            ec2.Peer.ipv4("15.248.4.0/23"),
-            ec2.Port.tcp(22),
-            "Allow SSH access from anywhere"
+            ec2.Peer.ipv4(f"{get_public_ip()}/32"),
+            ec2.Port.tcp(8000),
         )
 
         # The user data script to bootstrap the EC2 instance
@@ -147,6 +194,15 @@ class EksClusterStack(Stack):
         bastion.node.add_dependency(key_pair)
         bastion.node.add_dependency(cluster)
 
+        env_content = (
+            f"BASTION_HOST={bastion.instance.attr_public_dns_name}\n"
+            "MCP_PORT=8000\n"
+            f"AWS_REGION={self.region}\n"
+            f"EKS_CLUSTER={cluster.cluster_name}\n"
+            f"LAMBDA_ARN={kubectl_lambda.function_arn}"
+        )
+
+
         # Create outputs to help user access the cluster
         CfnOutput(
             self,
@@ -172,6 +228,18 @@ class EksClusterStack(Stack):
             value=f"aws eks update-kubeconfig --name {cluster.cluster_name} --region {self.region}"
         )
 
+        # Create outputs to help retrieve the private key
+        CfnOutput(
+            self,
+            "GetSSHKeyCommand",
+            value=f"aws ssm get-parameter --name /ec2/keypair/{key_pair.attr_key_pair_id} --region {self.region} --with-decryption --query Parameter.Value --output text > {key_pair.key_name}.pem && chmod 400 {key_pair.key_name}.pem"
+        )
+
+        CfnOutput(
+            self,
+            "DotEnvFileContent",
+            value=env_content
+        )
 
 def get_bootstrap_script():
     return """#!/bin/bash
