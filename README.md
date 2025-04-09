@@ -4,6 +4,8 @@ This project creates a natural language interface for managing Amazon EKS (Elast
 
 ## Overview
 
+![architecture](static/architecture.png)
+
 This application provides two different interfaces for interacting with your EKS cluster in natural language:
 
 1. **Streamlit Interface**: A web dashboard with Kubernetes resource visualization capabilities and a chat interface
@@ -43,19 +45,21 @@ The system architecture consists of:
 
 ```bash
 # Clone the repository
-git clone <your-repo-url>
-cd eks-natural-language-assistant
+git clone https://github.com/cdanielsoh/mcp-on-eks-bastion.git
+cd mcp-on-eks-bastion
 
-# Install Python dependencies
-pip install -r requirements.txt
+python -m venv .venv
+source .venv/bin/activate
 
 # Install Amazon Bedrock Inline Agent SDK
 git clone https://github.com/awslabs/amazon-bedrock-agent-samples.git
 cd amazon-bedrock-agent-samples/src/InlineAgent
-python -m venv .venv
-source .venv/bin/activate
-python -m pip install -e .
+pip install -e .
 cd ../../../
+
+# Install Python dependencies
+pip install -r requirements.txt
+
 ```
 
 ### 2. Deploy Infrastructure
