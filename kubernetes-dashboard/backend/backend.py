@@ -1,5 +1,4 @@
 import chainlit as cl
-import asyncio
 import json
 import time
 from InlineAgent.agent import InlineAgent
